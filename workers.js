@@ -3,16 +3,16 @@
 // ==========================================
 
 // 1. Telegram Bot Token
-const TG_TOKEN = '电报机器人API'; 
+const TG_TOKEN = 'api'; 
 
 // 2. OpenRouter API Key
-const OPENROUTER_KEY = '你的API'; 
+const OPENROUTER_KEY = 'api'; 
 
 // 3. 你的机器人用户名 (不带 @)
-const BOT_USERNAME = '你的机器人用户名'; 
+const BOT_USERNAME = 'yourbotname'; 
 
-// 4. 主群组兜底 ID (直接发 /unban 时，默认在此群执行，需要带-)
-const DEFAULT_GROUP_ID = '-你的群组ID'; 
+// 4. 主群组兜底 ID (直接发 /unban 时，默认在此群执行)
+const DEFAULT_GROUP_ID = '-yourgroupid'; 
 
 // 5. OpenRouter 使用的模型
 const AI_MODEL = 'stepfun/step-3.5-flash:free';
@@ -46,7 +46,8 @@ export default {
       const messageContent = update.message?.text || update.message?.caption;
       
       if (update.message && messageContent) {
-         console.log("📥 收到推送消息，内容:", messageContent);
+         // 这里只打印表面文字供参考，实际后台会做深度提取
+         console.log("📥 收到推送消息，表面内容:", messageContent);
          ctx.waitUntil(processMessage(update.message));
       }
     } catch (error) {
@@ -60,13 +61,36 @@ export default {
 async function processMessage(message) {
   const chatId = message.chat.id;
   const userId = message.from.id;
-  const text = (message.text || message.caption || '').trim();
-  if (!text) return; 
+  const tgApiUrl = `https://api.telegram.org/bot${TG_TOKEN}`;
+  
+  // 🌟 核心修复点 1：透视眼级别的内容提取 (剥开隐藏的色情预览和引用)
+  const rawText = (message.text || message.caption || '').trim();
+  let fullContent = rawText;
+  
+  // 提取链接预览中的文字 (专治截图中的隐藏链接引流)
+  if (message.web_page) {
+      fullContent += " " + (message.web_page.title || "") + " " + (message.web_page.description || "");
+  }
+  // 提取频道转发的标题
+  if (message.forward_from_chat) {
+      fullContent += " " + (message.forward_from_chat.title || "");
+  }
+  // 提取引用内容 (Quote)
+  if (message.quote) {
+      fullContent += " " + (message.quote.text || "");
+  }
+  fullContent = fullContent.trim();
+
+  // 🌟 核心修复点 2：抓取隐藏在文字背后的超链接实体
+  const entities = message.entities || message.caption_entities || [];
+  const hasHiddenLink = entities.some(e => e.type === 'url' || e.type === 'text_link');
+
+  // 如果提取完后依然没有任何内容且没有隐藏链接，才结束
+  if (!fullContent && !hasHiddenLink) return; 
 
   const messageId = message.message_id;
   const firstName = message.from.first_name || '用户'; 
   const chatType = message.chat.type; 
-  const tgApiUrl = `https://api.telegram.org/bot${TG_TOKEN}`;
 
   try {
     // ==========================================
@@ -74,14 +98,14 @@ async function processMessage(message) {
     // ==========================================
     if (chatType === 'private') {
       
-      if (text.startsWith('/start unmute_') || text.startsWith('/start unban_')) {
-        const targetGroupId = text.replace('/start unmute_', '').replace('/start unban_', '');
+      if (rawText.startsWith('/start unmute_') || rawText.startsWith('/start unban_')) {
+        const targetGroupId = rawText.replace('/start unmute_', '').replace('/start unban_', '');
         await handleUnban(tgApiUrl, targetGroupId, userId, chatId, true);
         return;
       }
 
-      if (text.startsWith('/unban -100') || text.startsWith('/unmute -100')) {
-        const parts = text.split(' '); 
+      if (rawText.startsWith('/unban -100') || rawText.startsWith('/unmute -100')) {
+        const parts = rawText.split(' '); 
         if (parts.length === 2) {
           const targetGroupId = parts[1];
           await handleUnban(tgApiUrl, targetGroupId, userId, chatId, true);
@@ -89,7 +113,7 @@ async function processMessage(message) {
         return;
       }
 
-      if (text === '/unban' || text === '/unmute') {
+      if (rawText === '/unban' || rawText === '/unmute') {
         const isMainGroupSuccess = await handleUnban(tgApiUrl, DEFAULT_GROUP_ID, userId, chatId, false);
         
         const replyText = isMainGroupSuccess 
@@ -104,19 +128,19 @@ async function processMessage(message) {
         return;
       }
 
-      if (text.startsWith('-100')) {
+      if (rawText.startsWith('-100')) {
         await fetch(`${tgApiUrl}/sendMessage`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
             chat_id: chatId, 
-            text: `✅ 群组 ID [${text}] 登记成功！\n\n请将本机器人设置为该群管理员，并赋予【删除】和【封禁/限制】权限即可生效。` 
+            text: `✅ 群组 ID [${rawText}] 登记成功！\n\n请将本机器人设置为该群管理员，并赋予【删除】和【封禁/限制】权限即可生效。` 
           })
         });
         return;
       }
 
-      if (text === '/start') {
+      if (rawText === '/start') {
         await fetch(`${tgApiUrl}/sendMessage`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -136,8 +160,7 @@ async function processMessage(message) {
     // ==========================================
     if (chatType === 'group' || chatType === 'supergroup') {
       
-      // 🌟 核心修复 1：检查是否为匿名管理员或以群组名义发言
-      // 1087968824 是 Telegram 匿名管理服务的固定 ID
+      // 检查是否为匿名管理员或以群组名义发言
       if (userId === 1087968824 || (message.sender_chat && message.sender_chat.id === chatId)) {
          console.log(`🛡️ 自动放行：发信人为匿名管理员或群组本身。`);
          return;
@@ -149,24 +172,26 @@ async function processMessage(message) {
       if (memberData.ok) {
         const status = memberData.result.status;
         
-        // 🌟 核心修复 2：只要查到是管理员或群主，立即中断程序并放行
+        // 只要查到是管理员或群主，立即中断程序并放行
         if (status === 'creator' || status === 'administrator') {
            console.log(`🛡️ 白名单生效：用户 ${userId} 在该群身份为 ${status}，已放行。`); 
            return; 
         }
 
-        // 走到这里的全是普通群员，开始进入查杀逻辑
         let isAd = false;
         
-        // 【第一道防线】：绝对正则秒杀
-        const hasLink = /(https?:\/\/|www\.|[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/|\b))/i.test(text);
+        // 🌟 核心修复点 3：全方位拦截链接 (包含正则 + 隐藏实体 + 频道转发)
+        const hasRegexLink = /(https?:\/\/|www\.|[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/|\b)|t\.me\/)/i.test(fullContent);
+        const isChannelForward = !!message.forward_from_chat || (message.forward_origin && message.forward_origin.type === 'channel');
+        
+        const hasLink = hasRegexLink || hasHiddenLink || isChannelForward;
         
         if (hasLink) {
-          console.log(`🔗 拦截成功：普通成员 ${userId} 发送了链接，直接判定为违规！`);
+          console.log(`🔗 拦截成功：普通成员 ${userId} 触发了 [正则链接/隐藏链接/频道转发] 必杀，直接判定为违规！`);
           isAd = true;
         } else {
-          // 【第二道防线】：强化版 AI 内容分析
-          isAd = await checkAdWithOpenRouter(text);
+          // 【第二道防线】：如果确实没有链接，将深度提取出的【包含隐藏预览的文字】全部送给 AI
+          isAd = await checkAdWithOpenRouter(fullContent);
         }
         
         if (isAd) {
@@ -283,7 +308,7 @@ async function checkAdWithOpenRouter(text) {
     });
     const data = await response.json();
     
-    console.log(`🤖 AI 分析文本 [${text}] 的结果是:`, data.choices?.[0]?.message?.content);
+    console.log(`🤖 AI 深度分析文本 [${text}] 的结果是:`, data.choices?.[0]?.message?.content);
     
     return data.choices?.[0]?.message?.content?.trim().toLowerCase().includes('true') || false;
   } catch (e) {
