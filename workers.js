@@ -12,10 +12,10 @@ const OPENROUTER_KEY = 'api';
 const OPENROUTER_KEY_2 = 'api'; 
 
 // 3. 你的机器人用户名 (不带 @)
-const BOT_USERNAME = 'botname'; 
+const BOT_USERNAME = 'yourbotname'; 
 
 // 4. 主群组兜底 ID (直接发 /unban 时，默认在此群执行)
-const DEFAULT_GROUP_ID = '-groupid'; 
+const DEFAULT_GROUP_ID = '-yourgroupID'; 
 
 // 5. OpenRouter 使用的模型 (账号 1)
 const AI_MODEL = 'openrouter/free';
@@ -102,6 +102,14 @@ async function processMessage(message, request, update) {
   
   // 如果是指令或完全没内容，也放过，但记录一下
   if (!fullContent && !hasHiddenLink && !rawText.startsWith('/')) return; 
+
+  // 🌟【新增防线】：捕获发送者的昵称和用户名，防范“看我名字”类引流
+  if (message.from) {
+      const senderInfo = [message.from.first_name, message.from.last_name, message.from.username].filter(Boolean).join(" ");
+      if (senderInfo) {
+          fullContent += ` [发送者昵称信息: ${senderInfo}]`;
+      }
+  }
 
   const messageId = message.message_id;
   const firstName = message.from?.first_name || '用户'; 
