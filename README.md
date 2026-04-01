@@ -68,7 +68,11 @@ const DEFAULT_GROUP_ID = '你的主群组ID';
    https://api.telegram.org/bot<你的TOKEN>/setWebhook?url=https://<你的WORKER域名>
 
 4. 初始化 (重要)
-
+为了让机器人能够读取消息，必须通过 @BotFather 进行以下设置：
+    发送 /mybots -> 选择你的机器人 -> Bot Settings。
+    Group Privacy: 设置为 Turn OFF。
+    Allow Groups: 设置为 ON。
+    将机器人拉入群组并设为管理员，确保赋予“删除消息”和“封禁用户”权限。
 部署完成后，请务必用你的 Telegram 账号私聊机器人发送以下指令，以开启“编辑消息拦截”权限：
 
     /resetwebhook
