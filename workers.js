@@ -3,27 +3,30 @@
 // ==========================================
 
 // 1. Telegram Bot Token
-const TG_TOKEN = 'api'; 
+const TG_TOKEN = 'YOUR_TG_TOKEN'; 
 
 // 2. OpenRouter API Key (账号 1)
-const OPENROUTER_KEY = 'api'; 
+const OPENROUTER_KEY = 'YOUR_OPENROUTER_KEY_1'; 
 
-// 🌟 新增 1：第二个 OpenRouter API Key (账号 2)
-const OPENROUTER_KEY_2 = 'api'; 
+// 3. OpenRouter API Key (账号 2)
+const OPENROUTER_KEY_2 = 'YOUR_OPENROUTER_KEY_2'; 
 
-// 3. 你的机器人用户名 (不带 @)
-const BOT_USERNAME = 'yourbotname'; 
+// 🌟 新增：Cloudflare Workers AI 配置 (账号 3)
+const CF_ACCOUNT_ID = 'YOUR_CF_ACCOUNT_ID';
+const CF_API_TOKEN = 'YOUR_CF_API_TOKEN';
 
-// 4. 主群组兜底 ID (直接发 /unban 时，默认在此群执行)
-const DEFAULT_GROUP_ID = '-yourgroupID'; 
+// 4. 你的机器人用户名 (不带 @)
+const BOT_USERNAME = 'kguanliyuan2025bot'; 
 
-// 5. OpenRouter 使用的模型 (账号 1)
-const AI_MODEL = 'openrouter/free';
+// 5. 主群组兜底 ID
+const DEFAULT_GROUP_ID = '-1001960587625'; 
 
-// 🌟 新增 2：第二个 AI 模型 (账号 2)
-const AI_MODEL_2 = 'stepfun/step-3.5-flash:free'; 
+// 6. 各节点使用的 AI 模型
+const AI_MODEL = 'openrouter/free'; // 主节点模型
+const AI_MODEL_2 = 'openrouter/free'; // 备节点模型
+const CF_AI_MODEL = '@cf/moonshotai/kimi-k2.5'; // 🌟 CF 边缘节点模型 (Kimi 2.5)
 
-// 6. 🌟 骨灰级强化的 AI 判别提示词
+// 7. 🌟 骨灰级强化的 AI 判别提示词
 const SYSTEM_PROMPT = `你是一个极其严格的社群内容过滤助手，宁可错杀不可放过。
 请判断用户发送的文本是否包含以下任意一种情况：
 1. 社区/平台宣传：只要文本中包含“直播间”、“交流社区”、“交流群”、“顶级社区”等名词，哪怕是一句极短的感叹或口号，必须视为引流广告！
@@ -50,10 +53,8 @@ export default {
     try {
       const update = await request.json();
       
-      // 🌟 最顶层的网络接收日志，证明 Telegram 到底有没有推数据过来
       console.log(`📩 [底层网络接收] 事件类型: ${Object.keys(update).join(', ')}`);
       
-      // 全面捕获：新消息、修改的消息、频道消息、频道修改消息
       const targetMessage = update.message || update.edited_message || update.channel_post || update.edited_channel_post;
       
       if (targetMessage) {
@@ -72,7 +73,6 @@ async function processMessage(message, request, update) {
   const userId = message.from?.id || message.sender_chat?.id;
   const tgApiUrl = `https://api.telegram.org/bot${TG_TOKEN}`;
   
-  // 🌟 透视眼：剥开底料
   const rawText = (message.text || message.caption || '').trim();
   let fullContent = rawText;
   
@@ -100,10 +100,8 @@ async function processMessage(message, request, update) {
 
   const isEdit = !!update.edited_message || !!update.edited_channel_post;
   
-  // 如果是指令或完全没内容，也放过，但记录一下
   if (!fullContent && !hasHiddenLink && !rawText.startsWith('/')) return; 
 
-  // 🌟【新增防线】：捕获发送者的昵称和用户名，防范“看我名字”类引流
   if (message.from) {
       const senderInfo = [message.from.first_name, message.from.last_name, message.from.username].filter(Boolean).join(" ");
       if (senderInfo) {
@@ -121,7 +119,6 @@ async function processMessage(message, request, update) {
     // ==========================================
     if (chatType === 'private') {
       
-      // 🌟 一键修复 Telegram Webhook 漏洞的隐藏指令
       if (rawText === '/resetwebhook') {
         const currentUrl = new URL(request.url).origin + new URL(request.url).pathname;
         const resetRes = await fetch(`${tgApiUrl}/setWebhook`, {
@@ -211,7 +208,6 @@ async function processMessage(message, request, update) {
 
         let isAd = false;
         
-        // 🌟 强力正则防线
         const hasRegexLink = /(https?:\/\/[^\s]+|[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/[^\s]*)?)/i.test(fullContent);
         const isChannelForward = !!message.forward_from_chat || (message.forward_origin && message.forward_origin.type === 'channel');
         
@@ -221,7 +217,8 @@ async function processMessage(message, request, update) {
           console.log(`🔗 拦截成功：触发 [正则链接/隐藏链接/频道转发] 必杀，直接判定为违规！`);
           isAd = true;
         } else {
-          isAd = await checkAdWithOpenRouter(fullContent);
+          // 🌟 调用升级后的多引擎调度中心
+          isAd = await checkAdMultiEngine(fullContent);
         }
         
         if (isAd) {
@@ -298,7 +295,11 @@ async function handleUnban(tgApiUrl, targetGroupId, userId, privateChatId, sendR
   return unrestrictData.ok; 
 }
 
-// 🌟 带 8 秒硬熔断的单路 AI 函数 (防死机)
+// ==========================================
+// 🤖 AI 引擎核心组
+// ==========================================
+
+// 引擎 1/2：OpenRouter 请求封装
 async function singleAIFetch(text, key, model, aiName) {
   try {
     const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('TIMEOUT')), 8000));
@@ -330,19 +331,65 @@ async function singleAIFetch(text, key, model, aiName) {
   }
 }
 
-// 🌟 双擎并发调度中心
-async function checkAdWithOpenRouter(text) {
-  console.log(`⚡ 启动双擎 AI 识别分析...`);
+// 🌟 引擎 3：Cloudflare Workers AI 请求封装 (针对 CF REST API 数据结构定制)
+async function cfAIFetch(text, accountId, token, model, aiName) {
+  try {
+    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('TIMEOUT')), 8000));
+    const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/${model}`;
+    
+    const fetchPromise = fetch(url, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        messages: [
+          { role: 'system', content: SYSTEM_PROMPT }, 
+          { role: 'user', content: text }
+        ] 
+      })
+    });
+    
+    const response = await Promise.race([fetchPromise, timeoutPromise]);
+    const data = await response.json();
+    let resultText = "";
+    
+    // CF API 成功的标志是 success: true，且结果在 result.response 中
+    if (data.success && data.result) {
+        resultText = data.result.response || "";
+    } else {
+        console.log(`⚠️ [${aiName}] API 返回异常:`, JSON.stringify(data.errors || data));
+    }
+    
+    console.log(`🤖 [${aiName}] 分析结果:`, resultText === "" ? "空" : resultText);
+    return resultText.trim().toLowerCase().includes('true');
+  } catch (e) {
+    if (e.message === 'TIMEOUT') {
+        console.error(`🚨 [${aiName}] API 响应超过 8 秒，强行拔网线熔断！`);
+    } else {
+        console.error(`❌ [${aiName}] 请求异常:`, e.message);
+    }
+    return false; 
+  }
+}
+
+// 🌟 升级版：三擎并发调度中心
+async function checkAdMultiEngine(text) {
+  console.log(`⚡ 启动三擎 AI 识别分析...`);
   
-  const [result1, result2] = await Promise.all([
+  // 并发拉起三个 AI 模型检测，任何一个返回 true 即判定为广告
+  const [result1, result2, result3] = await Promise.all([
       singleAIFetch(text, OPENROUTER_KEY, AI_MODEL, "主节点(Nvidia)"),
-      (OPENROUTER_KEY_2 && OPENROUTER_KEY_2.startsWith('sk-or'))
+      
+      (OPENROUTER_KEY_2 && OPENROUTER_KEY_2 !== 'YOUR_OPENROUTER_KEY_2')
         ? singleAIFetch(text, OPENROUTER_KEY_2, AI_MODEL_2, "备节点(Stepfun)")
+        : Promise.resolve(false),
+        
+      (CF_API_TOKEN && CF_API_TOKEN !== 'YOUR_CF_API_TOKEN')
+        ? cfAIFetch(text, CF_ACCOUNT_ID, CF_API_TOKEN, CF_AI_MODEL, "CF边缘节点(Kimi2.5)")
         : Promise.resolve(false)
   ]);
 
-  if (result1 || result2) {
-      console.log(`🚨 双擎裁决：命中规则！`);
+  if (result1 || result2 || result3) {
+      console.log(`🚨 多擎裁决：命中规则！`);
       return true;
   }
   return false;
