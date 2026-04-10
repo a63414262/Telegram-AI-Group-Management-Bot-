@@ -16,10 +16,10 @@ const CF_ACCOUNT_ID = 'YOUR_CF_ACCOUNT_ID';
 const CF_API_TOKEN = 'YOUR_CF_API_TOKEN';
 
 // 4. 你的机器人用户名 (不带 @)
-const BOT_USERNAME = 'kguanliyuan2025bot'; 
+const BOT_USERNAME = 'yourbotname'; 
 
 // 5. 主群组兜底 ID
-const DEFAULT_GROUP_ID = '-1001960587625'; 
+const DEFAULT_GROUP_ID = '-yourgroupID'; 
 
 // 6. 各节点使用的 AI 模型
 const AI_MODEL = 'openrouter/free'; // 主节点模型
