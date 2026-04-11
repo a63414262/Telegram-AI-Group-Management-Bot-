@@ -2,29 +2,33 @@
 // ⚙️ 核心硬编码配置区
 // ==========================================
 
-// 1. Telegram Bot Token
+// 1. Telegram Bot Token (通过 @BotFather 获取)
 const TG_TOKEN = 'YOUR_TG_TOKEN'; 
 
-// 2. OpenRouter API Key (账号 1)
+// 2. OpenRouter API Key (主节点)
 const OPENROUTER_KEY = 'YOUR_OPENROUTER_KEY_1'; 
 
-// 3. OpenRouter API Key (账号 2)
+// 3. OpenRouter API Key (备用节点，可留空)
 const OPENROUTER_KEY_2 = 'YOUR_OPENROUTER_KEY_2'; 
 
-// 🌟 新增：Cloudflare Workers AI 配置 (账号 3)
+// 🌟 Cloudflare Workers AI 配置
 const CF_ACCOUNT_ID = 'YOUR_CF_ACCOUNT_ID';
 const CF_API_TOKEN = 'YOUR_CF_API_TOKEN';
 
-// 4. 你的机器人用户名 (不带 @)
-const BOT_USERNAME = 'yourbotname'; 
+// 4. 你的机器人用户名 (不带 @，用于解封链接跳转)
+const BOT_USERNAME = 'your_bot_username'; 
 
-// 5. 主群组兜底 ID
-const DEFAULT_GROUP_ID = '-yourgroupID'; 
+// 5. 主群组兜底 ID (例如: -100123456789)
+const DEFAULT_GROUP_ID = '-100xxxxxxxxxx'; 
 
-// 6. 各节点使用的 AI 模型
+// 6. 各节点使用的 AI 模型 (五擎开关控制)
+// 💡 使用说明：如果您想停用某个模型，只需在名称最前面加一个 '#' 即可。
+// 例如：'#@cf/moonshotai/kimi-k2.5' 代表停用该节点。去掉 '#' 即可重新启用。
 const AI_MODEL = 'openrouter/free'; // 主节点模型
 const AI_MODEL_2 = 'openrouter/free'; // 备节点模型
-const CF_AI_MODEL = '@cf/moonshotai/kimi-k2.5'; // 🌟 CF 边缘节点模型 (Kimi 2.5)
+const CF_AI_MODEL_1 = '#@cf/moonshotai/kimi-k2.5'; // CF 边缘节点 1 (Kimi - 默认演示停用)
+const CF_AI_MODEL_2 = '@cf/google/gemma-4-26b-a4b-it'; // 🌟 CF 边缘节点 2 (Gemma)
+const CF_AI_MODEL_3 = '@cf/zai-org/glm-4.7-flash'; // 🌟 CF 边缘节点 3 (GLM)
 
 // 7. 🌟 骨灰级强化的 AI 判别提示词
 const SYSTEM_PROMPT = `你是一个极其严格的社群内容过滤助手，宁可错杀不可放过。
@@ -217,7 +221,7 @@ async function processMessage(message, request, update) {
           console.log(`🔗 拦截成功：触发 [正则链接/隐藏链接/频道转发] 必杀，直接判定为违规！`);
           isAd = true;
         } else {
-          // 🌟 调用升级后的多引擎调度中心
+          // 🌟 调用多引擎调度中心
           isAd = await checkAdMultiEngine(fullContent);
         }
         
@@ -331,7 +335,7 @@ async function singleAIFetch(text, key, model, aiName) {
   }
 }
 
-// 🌟 引擎 3：Cloudflare Workers AI 请求封装 (针对 CF REST API 数据结构定制)
+// 🌟 引擎 3/4/5：Cloudflare Workers AI 请求封装 (完美兼容多种返回结构)
 async function cfAIFetch(text, accountId, token, model, aiName) {
   try {
     const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('TIMEOUT')), 8000));
@@ -350,13 +354,22 @@ async function cfAIFetch(text, accountId, token, model, aiName) {
     
     const response = await Promise.race([fetchPromise, timeoutPromise]);
     const data = await response.json();
-    let resultText = "";
     
-    // CF API 成功的标志是 success: true，且结果在 result.response 中
+    // 如果嫌日志太长，可以在前面加 // 注释掉下面这行
+    // console.log(`🔍 [CF 底层透视 - ${aiName}] 请求 ${model} 返回:`, JSON.stringify(data));
+
+    let resultText = "";
     if (data.success && data.result) {
-        resultText = data.result.response || "";
+        // 🌟 核心修复：兼容 CF 的两种返回数据结构
+        if (data.result.response) {
+            // 老模型格式
+            resultText = data.result.response;
+        } else if (data.result.choices && data.result.choices.length > 0) {
+            // 新模型 (如 Gemma, GLM) 格式
+            resultText = data.result.choices[0].message?.content || "";
+        }
     } else {
-        console.log(`⚠️ [${aiName}] API 返回异常:`, JSON.stringify(data.errors || data));
+        console.log(`⚠️ [${aiName}] API 明确返回失败:`, JSON.stringify(data.errors || data));
     }
     
     console.log(`🤖 [${aiName}] 分析结果:`, resultText === "" ? "空" : resultText);
@@ -371,25 +384,43 @@ async function cfAIFetch(text, accountId, token, model, aiName) {
   }
 }
 
-// 🌟 升级版：三擎并发调度中心
+// 🌟 带有开关功能的五擎并发调度中心
 async function checkAdMultiEngine(text) {
-  console.log(`⚡ 启动三擎 AI 识别分析...`);
+  console.log(`⚡ 启动多擎 AI 识别分析...`);
+
+  // 检查模型是否被启用 (不为空且不以 '#' 开头)
+  const isEnabled = (modelString) => modelString && !modelString.startsWith('#');
   
-  // 并发拉起三个 AI 模型检测，任何一个返回 true 即判定为广告
-  const [result1, result2, result3] = await Promise.all([
-      singleAIFetch(text, OPENROUTER_KEY, AI_MODEL, "主节点(Nvidia)"),
+  // 并发拉起 AI 模型检测，跳过被标记为停用的节点
+  const [result1, result2, result3, result4, result5] = await Promise.all([
+      // 1. OpenRouter 主节点
+      isEnabled(AI_MODEL) 
+        ? singleAIFetch(text, OPENROUTER_KEY, AI_MODEL, "主节点(OR 1)")
+        : Promise.resolve(false),
       
-      (OPENROUTER_KEY_2 && OPENROUTER_KEY_2 !== 'YOUR_OPENROUTER_KEY_2')
-        ? singleAIFetch(text, OPENROUTER_KEY_2, AI_MODEL_2, "备节点(Stepfun)")
+      // 2. OpenRouter 备节点
+      (isEnabled(AI_MODEL_2) && OPENROUTER_KEY_2 && OPENROUTER_KEY_2 !== 'YOUR_OPENROUTER_KEY_2')
+        ? singleAIFetch(text, OPENROUTER_KEY_2, AI_MODEL_2, "备节点(OR 2)")
         : Promise.resolve(false),
         
-      (CF_API_TOKEN && CF_API_TOKEN !== 'YOUR_CF_API_TOKEN')
-        ? cfAIFetch(text, CF_ACCOUNT_ID, CF_API_TOKEN, CF_AI_MODEL, "CF边缘节点(Kimi2.5)")
+      // 3. CF 边缘节点 1 (Kimi)
+      isEnabled(CF_AI_MODEL_1)
+        ? cfAIFetch(text, CF_ACCOUNT_ID, CF_API_TOKEN, CF_AI_MODEL_1, "CF边缘节点(Kimi)")
+        : Promise.resolve(false),
+      
+      // 4. CF 边缘节点 2 (Gemma)
+      isEnabled(CF_AI_MODEL_2)
+        ? cfAIFetch(text, CF_ACCOUNT_ID, CF_API_TOKEN, CF_AI_MODEL_2, "CF边缘节点(Gemma)")
+        : Promise.resolve(false),
+      
+      // 5. CF 边缘节点 3 (GLM)
+      isEnabled(CF_AI_MODEL_3)
+        ? cfAIFetch(text, CF_ACCOUNT_ID, CF_API_TOKEN, CF_AI_MODEL_3, "CF边缘节点(GLM)")
         : Promise.resolve(false)
   ]);
 
-  if (result1 || result2 || result3) {
-      console.log(`🚨 多擎裁决：命中规则！`);
+  if (result1 || result2 || result3 || result4 || result5) {
+      console.log(`🚨 联合裁决：命中规则，准备执行清理！`);
       return true;
   }
   return false;
