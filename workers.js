@@ -1,5 +1,5 @@
 // ==========================================
-// ⚙️ 核心硬编码配置区
+// ⚙️ 核心硬编码配置区 (部署前请填入您的真实数据)
 // ==========================================
 
 // 1. Telegram Bot Token (通过 @BotFather 获取)
@@ -15,7 +15,7 @@ const OPENROUTER_KEY_2 = 'YOUR_OPENROUTER_KEY_2';
 const CF_ACCOUNT_ID = 'YOUR_CF_ACCOUNT_ID';
 const CF_API_TOKEN = 'YOUR_CF_API_TOKEN';
 
-// 4. 你的机器人用户名 (不带 @，用于解封链接跳转)
+// 4. 你的机器人用户名 (不带 @，用于解封跳转)
 const BOT_USERNAME = 'your_bot_username'; 
 
 // 5. 主群组兜底 ID (例如: -100123456789)
@@ -23,10 +23,9 @@ const DEFAULT_GROUP_ID = '-100xxxxxxxxxx';
 
 // 6. 各节点使用的 AI 模型 (五擎开关控制)
 // 💡 使用说明：如果您想停用某个模型，只需在名称最前面加一个 '#' 即可。
-// 例如：'#@cf/moonshotai/kimi-k2.5' 代表停用该节点。去掉 '#' 即可重新启用。
 const AI_MODEL = 'openrouter/free'; // 主节点模型
 const AI_MODEL_2 = 'openrouter/free'; // 备节点模型
-const CF_AI_MODEL_1 = '#@cf/moonshotai/kimi-k2.5'; // CF 边缘节点 1 (Kimi - 默认演示停用)
+const CF_AI_MODEL_1 = '#@cf/moonshotai/kimi-k2.5'; // CF 边缘节点 1 (示例：已用 # 停用)
 const CF_AI_MODEL_2 = '@cf/google/gemma-4-26b-a4b-it'; // 🌟 CF 边缘节点 2 (Gemma)
 const CF_AI_MODEL_3 = '@cf/zai-org/glm-4.7-flash'; // 🌟 CF 边缘节点 3 (GLM)
 
@@ -104,8 +103,6 @@ async function processMessage(message, request, update) {
 
   const isEdit = !!update.edited_message || !!update.edited_channel_post;
   
-  if (!fullContent && !hasHiddenLink && !rawText.startsWith('/')) return; 
-
   if (message.from) {
       const senderInfo = [message.from.first_name, message.from.last_name, message.from.username].filter(Boolean).join(" ");
       if (senderInfo) {
@@ -122,6 +119,7 @@ async function processMessage(message, request, update) {
     // 逻辑 A：私聊模式 (含隐藏修复指令)
     // ==========================================
     if (chatType === 'private') {
+      if (!rawText) return;
       
       if (rawText === '/resetwebhook') {
         const currentUrl = new URL(request.url).origin + new URL(request.url).pathname;
@@ -192,81 +190,162 @@ async function processMessage(message, request, update) {
     // ==========================================
     if (chatType === 'group' || chatType === 'supergroup') {
       
-      console.log(`${isEdit ? '📝 [被编辑修改]' : '📥 [新发送]'} 内容: [${fullContent}]`);
+      console.log(`${isEdit ? '📝 [被编辑修改]' : '📥 [新发送]'} 事件`);
 
-      if (userId === 1087968824 || (message.sender_chat && message.sender_chat.id === chatId)) {
-         console.log(`🛡️ 自动放行：发信人为匿名管理员或群组本身。`);
+      // 🛑 新手隔离营：进群前 24 小时禁止发链接/媒体
+      if (message.new_chat_members) {
+        for (const newUser of message.new_chat_members) {
+          if (newUser.is_bot) continue;
+          
+          const untilDate = Math.floor(Date.now() / 1000) + 86400; // 当前时间 + 24小时
+          await fetch(`${tgApiUrl}/restrictChatMember`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: chatId, user_id: newUser.id, until_date: untilDate,
+              permissions: {
+                can_send_messages: true, // 允许发纯文字
+                can_send_audios: false,
+                can_send_documents: false,
+                can_send_photos: false,
+                can_send_videos: false,
+                can_send_video_notes: false,
+                can_send_voice_notes: false,
+                can_send_polls: false,
+                can_send_other_messages: false, // 禁止贴纸/GIF
+                can_add_web_page_previews: false // 禁止网页预览
+              }
+            })
+          });
+        }
+        
+        // 发送阅后即焚的警告提示
+        const welcomeRes = await fetch(`${tgApiUrl}/sendMessage`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: `🚨 **新兵防卫系统启动**\n\n新进群成员在 **24小时内** 仅可发送纯文本聊天，禁止发送任何图片、视频、贴纸、文件或外部链接。\n违规尝试将被阻断，24小时后自动解除限制。`,
+            parse_mode: 'Markdown'
+          })
+        });
+        const welcomeData = await welcomeRes.json();
+        if (welcomeData.ok) {
+          await new Promise(resolve => setTimeout(resolve, 15000));
+          await fetch(`${tgApiUrl}/deleteMessage`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: chatId, message_id: welcomeData.result.message_id })
+          });
+        }
+        return; // 新人进群系统消息处理完毕，退出
+      }
+
+      // 获取当前发信人的群员状态
+      const memberRes = await fetch(`${tgApiUrl}/getChatMember?chat_id=${chatId}&user_id=${userId}`);
+      const memberData = await memberRes.json();
+      let isAdmin = false;
+      if (memberData.ok) {
+        const status = memberData.result.status;
+        isAdmin = status === 'creator' || status === 'administrator';
+      }
+
+      // ⚔️ 捕杀网：回复指令处理 (群众举报 & 管理员斩杀)
+      if (message.reply_to_message && rawText) {
+        const cmd = rawText.toLowerCase();
+        const replyMsgId = message.reply_to_message.message_id;
+        const targetUserId = message.reply_to_message.from.id;
+
+        // 1. 管理员一键斩杀 (/spam 或 /kill)
+        if ((cmd === '/spam' || cmd === '/kill') && isAdmin) {
+          // 删除原广告
+          await fetch(`${tgApiUrl}/deleteMessage`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: chatId, message_id: replyMsgId }) });
+          // 删除管理员发的指令，保持清爽
+          await fetch(`${tgApiUrl}/deleteMessage`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: chatId, message_id: messageId }) });
+          // 彻底禁言发广告的机器号
+          await fetch(`${tgApiUrl}/restrictChatMember`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: chatId, user_id: targetUserId, permissions: { can_send_messages: false } }) });
+          return; // 处理完毕，退出
+        }
+
+        // 2. 群友一键举报 (/report 或 @admin)
+        if (cmd === '/report' || cmd === '@admin') {
+          // 删掉举报指令避免刷屏
+          await fetch(`${tgApiUrl}/deleteMessage`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: chatId, message_id: messageId }) });
+          // 在被举报的消息下发个警告（阅后即焚）
+          const alertRes = await fetch(`${tgApiUrl}/sendMessage`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: chatId, reply_to_message_id: replyMsgId, text: `🚨 收到群众举报，该消息已进入高危待审状态，管理员将尽快核实并处理。` })
+          });
+          const alertData = await alertRes.json();
+          if (alertData.ok) {
+            await new Promise(resolve => setTimeout(resolve, 10000));
+            await fetch(`${tgApiUrl}/deleteMessage`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: chatId, message_id: alertData.result.message_id }) });
+          }
+          return; // 处理完毕，退出
+        }
+      }
+
+      // 如果完全没内容并且没有隐藏链接，放过
+      if (!fullContent && !hasHiddenLink && !rawText.startsWith('/')) return; 
+
+      // 🛡️ 管理员/系统号免检放行 (防误杀)
+      if (userId === 1087968824 || (message.sender_chat && message.sender_chat.id === chatId) || isAdmin) {
+         console.log(`🛡️ 白名单生效：发信人为管理员或群组本身，已放行。`);
          return;
       }
 
-      const memberRes = await fetch(`${tgApiUrl}/getChatMember?chat_id=${chatId}&user_id=${userId}`);
-      const memberData = await memberRes.json();
-
-      if (memberData.ok) {
-        const status = memberData.result.status;
-        
-        if (status === 'creator' || status === 'administrator') {
-           console.log(`🛡️ 白名单生效：用户 ${userId} 在该群身份为 ${status}，已放行。`); 
-           return; 
-        }
-
-        let isAd = false;
-        
-        const hasRegexLink = /(https?:\/\/[^\s]+|[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/[^\s]*)?)/i.test(fullContent);
-        const isChannelForward = !!message.forward_from_chat || (message.forward_origin && message.forward_origin.type === 'channel');
-        
-        const hasLink = hasRegexLink || hasHiddenLink || isChannelForward;
-        
-        if (hasLink) {
-          console.log(`🔗 拦截成功：触发 [正则链接/隐藏链接/频道转发] 必杀，直接判定为违规！`);
-          isAd = true;
-        } else {
-          // 🌟 调用多引擎调度中心
-          isAd = await checkAdMultiEngine(fullContent);
-        }
-        
-        if (isAd) {
-          const delRes = await fetch(`${tgApiUrl}/deleteMessage`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ chat_id: chatId, message_id: messageId })
-          });
-          const delData = await delRes.json();
-          if (!delData.ok) console.log(`⚠️ 删除消息失败:`, delData.description);
-
-          const restrictRes = await fetch(`${tgApiUrl}/restrictChatMember`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-              chat_id: chatId, user_id: userId,
-              permissions: { can_send_messages: false }
-            })
-          });
-          const restrictResult = await restrictRes.json();
-          if (!restrictResult.ok) console.log(`⚠️ 禁言用户失败:`, restrictResult.description);
-          
-          const dynamicUnmuteUrl = `https://t.me/${BOT_USERNAME}?start=unban_${chatId}`;
-          const warningRes = await fetch(`${tgApiUrl}/sendMessage`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              chat_id: chatId,
-              text: `⚠️ 检测到用户 [${firstName}](tg://user?id=${userId}) 发布违规内容，已被清理。\n\n💡 若属误判，请点击下方按钮，或私聊机器人发送 /unban 自助解除：`,
-              parse_mode: 'Markdown',
-              reply_markup: { inline_keyboard: [[{ text: "🔓 点击此处自助 /unban 解除限制", url: dynamicUnmuteUrl }]] }
-            })
-          });
-
-          const warningData = await warningRes.json();
-
-          if (warningData.ok) {
-            const warningMessageId = warningData.result.message_id; 
-            await new Promise(resolve => setTimeout(resolve, 10000));
-            await fetch(`${tgApiUrl}/deleteMessage`, {
-              method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ chat_id: chatId, message_id: warningMessageId })
-            });
-          }
-        }
+      // 💥 L0级：正则初筛必杀网
+      let isAd = false;
+      const hasRegexLink = /(https?:\/\/[^\s]+|[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/[^\s]*)?)/i.test(fullContent);
+      const isChannelForward = !!message.forward_from_chat || (message.forward_origin && message.forward_origin.type === 'channel');
+      
+      const hasLink = hasRegexLink || hasHiddenLink || isChannelForward;
+      
+      if (hasLink) {
+        console.log(`🔗 拦截成功：触发 [正则链接/隐藏链接/频道转发] 必杀，直接判定为违规！`);
+        isAd = true;
       } else {
-        console.error(`❌ 获取成员身份失败: ${memberData.description}`);
+        // 🌟 💥 L1级：多引擎 AI 深度调度中心
+        isAd = await checkAdMultiEngine(fullContent);
+      }
+      
+      // 执行终极制裁
+      if (isAd) {
+        const delRes = await fetch(`${tgApiUrl}/deleteMessage`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: chatId, message_id: messageId })
+        });
+        const delData = await delRes.json();
+        if (!delData.ok) console.log(`⚠️ 删除消息失败:`, delData.description);
+
+        const restrictRes = await fetch(`${tgApiUrl}/restrictChatMember`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            chat_id: chatId, user_id: userId,
+            permissions: { can_send_messages: false }
+          })
+        });
+        const restrictResult = await restrictRes.json();
+        if (!restrictResult.ok) console.log(`⚠️ 禁言用户失败:`, restrictResult.description);
+        
+        const dynamicUnmuteUrl = `https://t.me/${BOT_USERNAME}?start=unban_${chatId}`;
+        const warningRes = await fetch(`${tgApiUrl}/sendMessage`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: `⚠️ 检测到用户 [${firstName}](tg://user?id=${userId}) 发布违规内容，已被清理。\n\n💡 若属误判，请点击下方按钮，或私聊机器人发送 /unban 自助解除：`,
+            parse_mode: 'Markdown',
+            reply_markup: { inline_keyboard: [[{ text: "🔓 点击此处自助 /unban 解除限制", url: dynamicUnmuteUrl }]] }
+          })
+        });
+
+        const warningData = await warningRes.json();
+
+        if (warningData.ok) {
+          const warningMessageId = warningData.result.message_id; 
+          await new Promise(resolve => setTimeout(resolve, 10000));
+          await fetch(`${tgApiUrl}/deleteMessage`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: chatId, message_id: warningMessageId })
+          });
+        }
       }
     }
   } catch (err) {
@@ -335,7 +414,7 @@ async function singleAIFetch(text, key, model, aiName) {
   }
 }
 
-// 🌟 引擎 3/4/5：Cloudflare Workers AI 请求封装 (完美兼容多种返回结构)
+// 🌟 引擎 3/4/5：Cloudflare Workers AI 请求封装
 async function cfAIFetch(text, accountId, token, model, aiName) {
   try {
     const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('TIMEOUT')), 8000));
@@ -354,18 +433,13 @@ async function cfAIFetch(text, accountId, token, model, aiName) {
     
     const response = await Promise.race([fetchPromise, timeoutPromise]);
     const data = await response.json();
-    
-    // 如果嫌日志太长，可以在前面加 // 注释掉下面这行
-    // console.log(`🔍 [CF 底层透视 - ${aiName}] 请求 ${model} 返回:`, JSON.stringify(data));
 
     let resultText = "";
     if (data.success && data.result) {
-        // 🌟 核心修复：兼容 CF 的两种返回数据结构
+        // 兼容 CF 的两种返回数据结构
         if (data.result.response) {
-            // 老模型格式
             resultText = data.result.response;
         } else if (data.result.choices && data.result.choices.length > 0) {
-            // 新模型 (如 Gemma, GLM) 格式
             resultText = data.result.choices[0].message?.content || "";
         }
     } else {
