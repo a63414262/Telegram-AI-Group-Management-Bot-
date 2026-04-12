@@ -38,6 +38,10 @@
    const OPENROUTER_KEY = 'YOUR_OPENROUTER_API_KEY_1'; 
    // 可选：填入备用 API Key
    const OPENROUTER_KEY_2 = 'YOUR_OPENROUTER_API_KEY_2';
+   // 你的机器人用户名 (不带 @，用于解封链接跳转) 
+   const BOT_USERNAME = 'your_bot_username';  
+  // 主群组兜底 ID (直接发 /unban 时，默认在此群执行，例：-100123456789) 
+   const DEFAULT_GROUP_ID = 'YOUR_DEFAULT_GROUP_ID';  
 
 5.点击右上角的 Deploy 保存上线。
 
